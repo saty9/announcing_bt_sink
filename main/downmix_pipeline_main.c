@@ -28,6 +28,8 @@
 #include <bluetooth_service.h>
 #include "bluetooth_service.h"
 #include "nvs_flash.h"
+#include "audio_flash_tone/audio_tone_uri.h"
+
 
 
 static const char *TAG = "DOWNMIX_PIPELINE_EXAMPLE";
@@ -147,7 +149,7 @@ void app_main(void)
     rsp_sdcard_cfg.dest_ch = 1,
     base_rsp_filter_el = rsp_filter_init(&rsp_sdcard_cfg);
 
-    rsp_sdcard_cfg.src_rate = 16000,
+    rsp_sdcard_cfg.src_rate = 44100,
     rsp_sdcard_cfg.src_ch = 1,
     rsp_sdcard_cfg.dest_rate = 48000,
     rsp_sdcard_cfg.dest_ch = 1,
@@ -226,6 +228,7 @@ void app_main(void)
 
         /* When the mode button pressed, the downmix pipeline switch on */
         if (((int)msg.data == get_input_mode_id()) && (msg.cmd == PERIPH_BUTTON_PRESSED)) {
+            audio_element_set_uri(newcome_tone_reader_el, tone_uri[TONE_TYPE_READY_TO_CONNECT]);
             audio_pipeline_run(newcome_stream_pipeline);
             downmix_set_work_mode(downmixer, ESP_DOWNMIX_WORK_MODE_SWITCH_ON);
             downmix_set_input_rb_timeout(downmixer, 50, INDEX_BASE_STREAM);
