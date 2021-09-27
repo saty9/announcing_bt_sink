@@ -277,6 +277,12 @@ void app_main(void)
                 ESP_LOGW(TAG, "[ * ] Bluetooth disconnected");
                 device_disconnected = true;
 
+            audio_pipeline_stop(newcome_stream_pipeline);
+            audio_pipeline_wait_for_stop(newcome_stream_pipeline);
+            audio_pipeline_terminate(newcome_stream_pipeline);
+            audio_pipeline_reset_ringbuffer(newcome_stream_pipeline);
+            audio_pipeline_reset_elements(newcome_stream_pipeline);
+
                 audio_element_set_uri(newcome_tone_reader_el, tone_uri[TONE_TYPE_DISCONNECTED]);
                 audio_pipeline_run(newcome_stream_pipeline);
                 downmix_set_work_mode(downmixer, ESP_DOWNMIX_WORK_MODE_SWITCH_ON);
@@ -287,6 +293,13 @@ void app_main(void)
     }
 
     ESP_LOGI(TAG, "[7.0] Stop all pipelines");
+    /* Stop mixer stream pipeline, Release resources */
+    audio_pipeline_stop(pipeline_mix);
+    audio_pipeline_wait_for_stop(pipeline_mix);
+    audio_pipeline_terminate(pipeline_mix);
+    audio_pipeline_unregister_more(pipeline_mix, downmixer, i2s_writer, NULL);
+    audio_pipeline_remove_listener(pipeline_mix);
+
     /* Stop base stream pipeline, Release resources */
     audio_pipeline_stop(base_stream_pipeline);
     audio_pipeline_wait_for_stop(base_stream_pipeline);
@@ -311,13 +324,6 @@ void app_main(void)
     audio_element_deinit(newcome_rsp_filter_el);
     audio_element_deinit(newcome_raw_write_el);
 
-    /* Stop mixer stream pipeline, Release resources */
-    audio_pipeline_stop(pipeline_mix);
-    audio_pipeline_wait_for_stop(pipeline_mix);
-    audio_pipeline_terminate(pipeline_mix);
-    audio_pipeline_unregister_more(pipeline_mix, downmixer, i2s_writer, NULL);
-    audio_pipeline_remove_listener(pipeline_mix);
-
     /* Stop all peripherals before removing the listener */
     esp_periph_set_stop_all(set);
     audio_event_iface_remove_listener(esp_periph_set_get_event_iface(set), evt);
@@ -330,4 +336,5 @@ void app_main(void)
     audio_element_deinit(downmixer);
     audio_element_deinit(i2s_writer);
     esp_periph_set_destroy(set);
+    bluetooth_service_destroy();
 }
