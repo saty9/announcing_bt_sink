@@ -77,9 +77,13 @@ void app_main(void)
     audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_DECODE, AUDIO_HAL_CTRL_START);
 
     ESP_LOGI(TAG, "[2.0] Setup peripherals");
+    ESP_LOGI(TAG, "[2.1] Create Bluetooth peripheral");
+    esp_periph_handle_t bt_periph = bluetooth_service_create_periph();
+    
     esp_periph_config_t periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
     esp_periph_set_handle_t set = esp_periph_set_init(&periph_cfg);
     audio_board_key_init(set);
+    esp_periph_start(set, bt_periph);
 
 
     ESP_LOGI(TAG, "[2.0] Get Bluetooth stream");
@@ -214,6 +218,7 @@ void app_main(void)
     downmix_set_input_rb_timeout(downmixer, 50, INDEX_NEWCOME_STREAM);
     ESP_LOGI(TAG, "device ready announcement playing...");
 
+    bool device_disconnected = false;
     while (1) {
         audio_event_iface_msg_t msg;
         esp_err_t ret = audio_event_iface_listen(evt, &msg, portMAX_DELAY);
@@ -261,6 +266,23 @@ void app_main(void)
             audio_pipeline_reset_ringbuffer(newcome_stream_pipeline);
             audio_pipeline_reset_elements(newcome_stream_pipeline);
             ESP_LOGI(TAG, "New come music stoped or finsihed");
+            if (device_disconnected)
+                break;
+        }
+
+        /* message when the Bluetooth is disconnected or suspended */
+        if (msg.source_type == PERIPH_ID_BLUETOOTH
+            && msg.source == (void *)bt_periph) {
+            if (msg.cmd == PERIPH_BLUETOOTH_DISCONNECTED) {
+                ESP_LOGW(TAG, "[ * ] Bluetooth disconnected");
+                device_disconnected = true;
+
+                audio_element_set_uri(newcome_tone_reader_el, tone_uri[TONE_TYPE_DISCONNECTED]);
+                audio_pipeline_run(newcome_stream_pipeline);
+                downmix_set_work_mode(downmixer, ESP_DOWNMIX_WORK_MODE_SWITCH_ON);
+                downmix_set_input_rb_timeout(downmixer, 0, INDEX_BASE_STREAM);
+                downmix_set_input_rb_timeout(downmixer, 50, INDEX_NEWCOME_STREAM);
+            }
         }
     }
 
