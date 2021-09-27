@@ -24,6 +24,11 @@
 #include "board.h"
 #include "periph_sdcard.h"
 #include "periph_button.h"
+#include <tone_stream.h>
+#include <bluetooth_service.h>
+#include "bluetooth_service.h"
+#include "nvs_flash.h"
+
 
 static const char *TAG = "DOWNMIX_PIPELINE_EXAMPLE";
 
@@ -38,12 +43,11 @@ static const char *TAG = "DOWNMIX_PIPELINE_EXAMPLE";
 
 void app_main(void)
 {
-    audio_element_handle_t base_fatfs_reader_el = NULL;
-    audio_element_handle_t base_mp3_decoder_el = NULL;
+    audio_element_handle_t bt_stream_reader = NULL;
     audio_element_handle_t base_rsp_filter_el = NULL;
     audio_element_handle_t base_raw_write_el = NULL;
 
-    audio_element_handle_t newcome_fatfs_reader_el = NULL;
+    audio_element_handle_t newcome_tone_reader_el = NULL;
     audio_element_handle_t newcome_mp3_decoder_el = NULL;
     audio_element_handle_t newcome_rsp_filter_el = NULL;
     audio_element_handle_t newcome_raw_write_el = NULL;
@@ -51,15 +55,39 @@ void app_main(void)
     esp_log_level_set("*", ESP_LOG_WARN);
     esp_log_level_set(TAG, ESP_LOG_INFO);
 
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES) {
+        // NVS partition was truncated and needs to be erased
+        // Retry nvs_flash_init
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+
+    ESP_LOGI(TAG, "[ 0 ] Create Bluetooth service");
+    bluetooth_service_cfg_t bt_cfg = {
+        .device_name = "ESP-ADF-SPEAKER-mixer",
+        .mode = BLUETOOTH_A2DP_SINK,
+    };
+    bluetooth_service_start(&bt_cfg);
+
     ESP_LOGI(TAG, "[1.0] Start audio codec chip");
     audio_board_handle_t board_handle = audio_board_init();
     audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_DECODE, AUDIO_HAL_CTRL_START);
 
-    ESP_LOGI(TAG, "[2.0] Start and wait for SDCARD to mount");
+    ESP_LOGI(TAG, "[2.0] Setup peripherals");
     esp_periph_config_t periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
     esp_periph_set_handle_t set = esp_periph_set_init(&periph_cfg);
-    audio_board_sdcard_init(set, SD_MODE_1_LINE);
     audio_board_key_init(set);
+
+
+    ESP_LOGI(TAG, "[2.0] Get Bluetooth stream");
+    bt_stream_reader = bluetooth_service_create_stream();
+
+    ESP_LOGI(TAG, "[2.0] Get tone stream");
+    tone_stream_cfg_t tone_cfg = TONE_STREAM_CFG_DEFAULT();
+    tone_cfg.type = AUDIO_STREAM_READER;
+    newcome_tone_reader_el = tone_stream_init(&tone_cfg);
+    AUDIO_NULL_CHECK(TAG, newcome_tone_reader_el, return);
 
     ESP_LOGI(TAG, "[3.0] Create pipeline_mix pipeline");
     audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
@@ -107,17 +135,8 @@ void app_main(void)
     const char *link_mix[2] = {"mixer", "i2s"};
     audio_pipeline_link(pipeline_mix, &link_mix[0], 2);
 
-    ESP_LOGI(TAG, "[4.0] Create Fatfs stream to read input data");
-    fatfs_stream_cfg_t fatfs_cfg = FATFS_STREAM_CFG_DEFAULT();
-    fatfs_cfg.type = AUDIO_STREAM_READER;
-    base_fatfs_reader_el = fatfs_stream_init(&fatfs_cfg);
-    audio_element_set_uri(base_fatfs_reader_el, "/sdcard/music.mp3");
-    newcome_fatfs_reader_el = fatfs_stream_init(&fatfs_cfg);
-    audio_element_set_uri(newcome_fatfs_reader_el, "/sdcard/tone.mp3");
-
     ESP_LOGI(TAG, "[4.1] Create mp3 decoder to decode mp3 file");
     mp3_decoder_cfg_t mp3_cfg = DEFAULT_MP3_DECODER_CONFIG();
-    base_mp3_decoder_el = mp3_decoder_init(&mp3_cfg);
     newcome_mp3_decoder_el = mp3_decoder_init(&mp3_cfg);
 
     ESP_LOGI(TAG, "[4.1] Create resample element");
@@ -144,22 +163,27 @@ void app_main(void)
     audio_event_iface_cfg_t evt_cfg = AUDIO_EVENT_IFACE_DEFAULT_CFG();
     audio_event_iface_handle_t evt = audio_event_iface_init(&evt_cfg);
 
+    ESP_LOGI(TAG, "[5.1.1] Set up base piepline");
     audio_pipeline_handle_t base_stream_pipeline = audio_pipeline_init(&pipeline_cfg);
     mem_assert(base_stream_pipeline);
-    audio_pipeline_register(base_stream_pipeline, base_fatfs_reader_el, "base_file");
-    audio_pipeline_register(base_stream_pipeline, base_mp3_decoder_el, "base_mp3");
+    audio_pipeline_register(base_stream_pipeline, bt_stream_reader, "bt");
     audio_pipeline_register(base_stream_pipeline, base_rsp_filter_el, "base_filter");
     audio_pipeline_register(base_stream_pipeline, base_raw_write_el, "base_raw");
 
-    const char *link_tag_base[4] = {"base_file", "base_mp3", "base_filter", "base_raw"};
+    ESP_LOGI(TAG, "[5.1.2] link base piepline");
+    const char *link_tag_base[3] = {"bt", "base_filter", "base_raw"};
     audio_pipeline_link(base_stream_pipeline, &link_tag_base[0], 4);
+
+    ESP_LOGI(TAG, "[5.1.2] link base to downmixer");
     ringbuf_handle_t rb_base = audio_element_get_input_ringbuf(base_raw_write_el);
     downmix_set_input_rb(downmixer, rb_base, 0);
+    ESP_LOGI(TAG, "[5.1.3] set base piepline listener");
     audio_pipeline_set_listener(base_stream_pipeline, evt);
 
+    ESP_LOGI(TAG, "[5.2] Set up newcome piepline");
     audio_pipeline_handle_t newcome_stream_pipeline = audio_pipeline_init(&pipeline_cfg);
     mem_assert(newcome_stream_pipeline);
-    audio_pipeline_register(newcome_stream_pipeline, newcome_fatfs_reader_el, "newcome_file");
+    audio_pipeline_register(newcome_stream_pipeline, newcome_tone_reader_el, "newcome_file");
     audio_pipeline_register(newcome_stream_pipeline, newcome_mp3_decoder_el, "newcome_mp3");
     audio_pipeline_register(newcome_stream_pipeline, newcome_rsp_filter_el, "newcome_filter");
     audio_pipeline_register(newcome_stream_pipeline, newcome_raw_write_el, "newcome_raw");
@@ -170,7 +194,7 @@ void app_main(void)
     downmix_set_input_rb(downmixer, rb_newcome, 1);
     audio_pipeline_set_listener(newcome_stream_pipeline, evt);
 
-    ESP_LOGI(TAG, "[5.1] Listening event from peripherals");
+    ESP_LOGI(TAG, "[5.3] Listening event from peripherals");
     audio_pipeline_set_listener(pipeline_mix, evt);
     audio_event_iface_set_listener(esp_periph_set_get_event_iface(set), evt);
     downmix_set_output_type(downmixer, PLAY_STATUS);
@@ -185,6 +209,18 @@ void app_main(void)
         esp_err_t ret = audio_event_iface_listen(evt, &msg, portMAX_DELAY);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "[ * ] Event interface error : %d", ret);
+            continue;
+        }
+
+        if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT && msg.source == (void *) bt_stream_reader
+            && msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
+            audio_element_info_t music_info = {0};
+            audio_element_getinfo(bt_stream_reader, &music_info);
+
+            ESP_LOGI(TAG, "[ * ] Receive music info from Bluetooth, sample_rates=%d, bits=%d, ch=%d",
+                     music_info.sample_rates, music_info.bits, music_info.channels);
+
+            rsp_filter_set_src_info(base_rsp_filter_el, music_info.sample_rates, music_info.channels);
             continue;
         }
 
@@ -226,12 +262,10 @@ void app_main(void)
     audio_pipeline_stop(base_stream_pipeline);
     audio_pipeline_wait_for_stop(base_stream_pipeline);
     audio_pipeline_terminate(base_stream_pipeline);
-    audio_pipeline_unregister_more(base_stream_pipeline, base_fatfs_reader_el,
-                                    base_mp3_decoder_el, base_rsp_filter_el, base_raw_write_el, NULL);
+    audio_pipeline_unregister_more(base_stream_pipeline, bt_stream_reader, base_rsp_filter_el, base_raw_write_el, NULL);
     audio_pipeline_remove_listener(base_stream_pipeline);
     audio_pipeline_deinit(base_stream_pipeline);
-    audio_element_deinit(base_fatfs_reader_el);
-    audio_element_deinit(base_mp3_decoder_el);
+    audio_element_deinit(bt_stream_reader);
     audio_element_deinit(base_rsp_filter_el);
     audio_element_deinit(base_raw_write_el);
 
@@ -239,11 +273,11 @@ void app_main(void)
     audio_pipeline_stop(newcome_stream_pipeline);
     audio_pipeline_wait_for_stop(newcome_stream_pipeline);
     audio_pipeline_terminate(newcome_stream_pipeline);
-    audio_pipeline_unregister_more(newcome_stream_pipeline, newcome_fatfs_reader_el,
+    audio_pipeline_unregister_more(newcome_stream_pipeline, newcome_tone_reader_el,
                                     newcome_mp3_decoder_el, newcome_rsp_filter_el, newcome_raw_write_el, NULL);
     audio_pipeline_remove_listener(newcome_stream_pipeline);
     audio_pipeline_deinit(newcome_stream_pipeline);
-    audio_element_deinit(newcome_fatfs_reader_el);
+    audio_element_deinit(newcome_tone_reader_el);
     audio_element_deinit(newcome_mp3_decoder_el);
     audio_element_deinit(newcome_rsp_filter_el);
     audio_element_deinit(newcome_raw_write_el);
