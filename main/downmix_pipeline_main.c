@@ -231,7 +231,7 @@ void app_main(void)
             audio_element_set_uri(newcome_tone_reader_el, tone_uri[TONE_TYPE_READY_TO_CONNECT]);
             audio_pipeline_run(newcome_stream_pipeline);
             downmix_set_work_mode(downmixer, ESP_DOWNMIX_WORK_MODE_SWITCH_ON);
-            downmix_set_input_rb_timeout(downmixer, 50, INDEX_BASE_STREAM);
+            downmix_set_input_rb_timeout(downmixer, 0, INDEX_BASE_STREAM);
             downmix_set_input_rb_timeout(downmixer, 50, INDEX_NEWCOME_STREAM);
             ESP_LOGI(TAG, "New come music running...");
         }
