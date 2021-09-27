@@ -206,6 +206,14 @@ void app_main(void)
     audio_pipeline_run(pipeline_mix);
     downmix_set_work_mode(downmixer, ESP_DOWNMIX_WORK_MODE_BYPASS);
     ESP_LOGI(TAG, "[6.0] Base stream pipeline running");
+
+    audio_element_set_uri(newcome_tone_reader_el, tone_uri[TONE_TYPE_READY_TO_CONNECT]);
+    audio_pipeline_run(newcome_stream_pipeline);
+    downmix_set_work_mode(downmixer, ESP_DOWNMIX_WORK_MODE_SWITCH_ON);
+    downmix_set_input_rb_timeout(downmixer, 0, INDEX_BASE_STREAM);
+    downmix_set_input_rb_timeout(downmixer, 50, INDEX_NEWCOME_STREAM);
+    ESP_LOGI(TAG, "device ready announcement playing...");
+
     while (1) {
         audio_event_iface_msg_t msg;
         esp_err_t ret = audio_event_iface_listen(evt, &msg, portMAX_DELAY);
@@ -223,18 +231,14 @@ void app_main(void)
                      music_info.sample_rates, music_info.bits, music_info.channels);
 
             rsp_filter_set_src_info(base_rsp_filter_el, music_info.sample_rates, music_info.channels);
-            continue;
-        }
-
-        /* When the mode button pressed, the downmix pipeline switch on */
-        if (((int)msg.data == get_input_mode_id()) && (msg.cmd == PERIPH_BUTTON_PRESSED)) {
-            audio_element_set_uri(newcome_tone_reader_el, tone_uri[TONE_TYPE_READY_TO_CONNECT]);
+            audio_element_set_uri(newcome_tone_reader_el, tone_uri[TONE_TYPE_CONNECTED]);
             audio_pipeline_run(newcome_stream_pipeline);
             downmix_set_work_mode(downmixer, ESP_DOWNMIX_WORK_MODE_SWITCH_ON);
             downmix_set_input_rb_timeout(downmixer, 0, INDEX_BASE_STREAM);
             downmix_set_input_rb_timeout(downmixer, 50, INDEX_NEWCOME_STREAM);
-            ESP_LOGI(TAG, "New come music running...");
+            continue;
         }
+
 
         /* Stop when the last pipeline element i2s_writer receives stop event */
         if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT && msg.source == (void *)i2s_writer
